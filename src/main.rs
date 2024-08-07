@@ -63,8 +63,8 @@ async fn main(_spawner: Spawner) {
     loop {
         let _ = wakeup.wait_for_any_edge().await;
         let color = match wakeup.get_level() {
-            Level::Low  => Color::Green,
-            Level::High => Color::Red,
+            Level::Low  => Color::Red,
+            Level::High => Color::Green,
         };
 
         let mut data_buf: Vec<u8, 32> = heapless::Vec::new();
@@ -74,7 +74,7 @@ async fn main(_spawner: Spawner) {
         data_buf.clear();
         let _ = data_buf.push(LightPattern::AlwaysOn.into());    // Breathing Light
         let _ = data_buf.push(0x00);                                // 0 = Very Fast, 255 = Very Slow; Max Time = 5 Seconds.
-        let _ = data_buf.push(color.into());                        // colour=Red, Blue, Purple
+        let _ = data_buf.push(color.clone().into());                        // colour=Red, Blue, Purple
         let _ = data_buf.push(0x00);                                // times=Infinite
 
         let send_buf = send(
@@ -85,9 +85,9 @@ async fn main(_spawner: Spawner) {
 
         // Send command buffer.
         let data_write: [u8; 16] = send_buf.clone().into_array().unwrap();
-        debug!(" write='{=[u8]:02X}''", data_write[..]);
+        debug!("W={=[u8]:02X}", data_write[..]);
         match tx.write(&data_write).await {
-            Ok(..) => info!("Write successful."),
+            Ok(..) => (), // No News is Good News.
             Err(e) => error!("Write error: {:?}", e),
         }
 
@@ -95,7 +95,6 @@ async fn main(_spawner: Spawner) {
         let mut read_buf: [u8; 1] = [0; 1]; // Can only read one byte at a time!
         let mut data_read: Vec<u8, 64> = heapless::Vec::new(); // Save buffer.
 
-        info!("Attempting read.");
         loop {
             match with_timeout(Duration::from_millis(500), rx.read(&mut read_buf)).await {
                 Ok(..) => {
@@ -104,10 +103,27 @@ async fn main(_spawner: Spawner) {
                 Err(..) => break,
             }
         }
-        info!("Read successful");
-        debug!("  read='{=[u8]:02X}'", data_read[..]);
+        debug!("R={=[u8]:02X}", data_read[..]);
 
-        //Timer::after_secs(5).await;
+        if color == Color::Red {
+            let mut data_buf: Vec<u8, 32> = heapless::Vec::new();
+            data_buf.clear();
+            let _ = data_buf.push(LightPattern::AlwaysOn.into());   // Breathing Light
+            let _ = data_buf.push(0x00);                            // 0 = Very Fast, 255 = Very Slow; Max Time = 5 Seconds.
+            let _ = data_buf.push(Color::Blue.into());              // colour=Red, Blue, Purple
+            let _ = data_buf.push(0x00);                            // times=Infinite
+            let send_buf = send(
+                Identifier::Command,
+                Instruction::AuraLedConfig,
+                data_buf
+            );
+            let data_write: [u8; 16] = send_buf.clone().into_array().unwrap();
+            match tx.write(&data_write).await {
+                Ok(..) => (), // No News is Good News.
+                Err(e) => error!("Write error: {:?}", e),
+            }
+        }
+
     }
 }
 
