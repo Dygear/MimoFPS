@@ -64,7 +64,7 @@ async fn main(_spawner: Spawner) {
         let _ = wakeup.wait_for_any_edge().await;
         let color = match wakeup.get_level() {
             Level::Low  => Color::Red,
-            Level::High => Color::Green,
+            Level::High => Color::Blue,
         };
 
         let mut data_buf: Vec<u8, 32> = heapless::Vec::new();
@@ -72,10 +72,10 @@ async fn main(_spawner: Spawner) {
         // Set the data first, because the length is dependent on that.
         // However, we write the length bits before we do the data.
         data_buf.clear();
-        let _ = data_buf.push(LightPattern::AlwaysOn.into());    // Breathing Light
-        let _ = data_buf.push(0x00);                                // 0 = Very Fast, 255 = Very Slow; Max Time = 5 Seconds.
-        let _ = data_buf.push(color.clone().into());                        // colour=Red, Blue, Purple
-        let _ = data_buf.push(0x00);                                // times=Infinite
+        let _ = data_buf.push(LightPattern::AlwaysOn.into());   // Breathing Light
+        let _ = data_buf.push(0x00);                            // 0 = Very Fast, 255 = Very Slow; Max Time = 5 Seconds.
+        let _ = data_buf.push(color.clone().into());            // colour=Red, Blue, Purple
+        let _ = data_buf.push(0x00);                            // times=Infinite
 
         let send_buf = send(
             Identifier::Command,
@@ -110,7 +110,7 @@ async fn main(_spawner: Spawner) {
             data_buf.clear();
             let _ = data_buf.push(LightPattern::AlwaysOn.into());   // Breathing Light
             let _ = data_buf.push(0x00);                            // 0 = Very Fast, 255 = Very Slow; Max Time = 5 Seconds.
-            let _ = data_buf.push(Color::Blue.into());              // colour=Red, Blue, Purple
+            let _ = data_buf.push(Color::Green.into());             // colour=Red, Blue, Purple
             let _ = data_buf.push(0x00);                            // times=Infinite
             let send_buf = send(
                 Identifier::Command,
