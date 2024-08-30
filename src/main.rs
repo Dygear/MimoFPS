@@ -17,21 +17,6 @@ bind_interrupts!(pub struct Irqs {
     UART0_IRQ  => UARTInterruptHandler<UART0>;
 });
 
-const START: u16 = 0xEF01;
-const ADDRESS: u32 = 0xFFFFFFFF;
-
-// Checksum is calculated on 'length (2 bytes) + data (??)'.
-fn compute_checksum(buf: Vec<u8, 256>) -> u16 {
-    let mut checksum = 0u16;
-
-    let check_end = buf.len();
-    let checked_bytes = &buf[6..check_end];
-    for byte in checked_bytes {
-        checksum += (*byte) as u16;
-    }
-    return checksum;
-}
-
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     info!("Start");
@@ -45,15 +30,24 @@ async fn main(_spawner: Spawner) {
     config.data_bits        = DataBits::DataBits8;
     config.parity           = Parity::ParityNone;
 
-    let mut wakeup = Input::new(p.PIN_18, Pull::Down);
+    // These are the Buttons on the Pico Breadboard.
+    //let mut btn1 = Input::new(p.PIN_12, Pull::Down);
+    //let mut btn2 = Input::new(p.PIN_13, Pull::Down);
+    //let mut btn3 = Input::new(p.PIN_14, Pull::Down);
+    //let mut btn4 = Input::new(p.PIN_15, Pull::Down);
+    // This is the WAKEUP on the Finger Print Sensor.
+    let mut wakeup = Input::new(
+        p.PIN_18, // WAKE Pin (Blue)
+        Pull::Down
+    );
 
     let (
         mut tx,
         mut rx
     ) = Uart::new(
         p.UART0,
-        p.PIN_16,
-        p.PIN_17,
+        p.PIN_16, // TX Pin (Yellow)
+        p.PIN_17, // RX Pin (Purple)
         Irqs,
         p.DMA_CH0,
         p.DMA_CH1,
@@ -63,7 +57,7 @@ async fn main(_spawner: Spawner) {
     loop {
         let _ = wakeup.wait_for_any_edge().await;
         let color = match wakeup.get_level() {
-            Level::Low  => Color::Red,
+            Level::Low  => Color::Cyan,
             Level::High => Color::Blue,
         };
 
@@ -72,15 +66,15 @@ async fn main(_spawner: Spawner) {
         // Set the data first, because the length is dependent on that.
         // However, we write the length bits before we do the data.
         data_buf.clear();
-        let _ = data_buf.push(LightPattern::AlwaysOn.into());   // Breathing Light
-        let _ = data_buf.push(0x00);                            // 0 = Very Fast, 255 = Very Slow; Max Time = 5 Seconds.
+        let _ = data_buf.push(LightPattern::Breathing.into());  // Breathing Light
+        let _ = data_buf.push(0xFF);                            // 0 = Very Fast, 255 = Very Slow; Max Time = 5 Seconds.
         let _ = data_buf.push(color.clone().into());            // colour=Red, Blue, Purple
         let _ = data_buf.push(0x00);                            // times=Infinite
 
         let send_buf = send(
             Identifier::Command,
             Instruction::AuraLedConfig,
-            data_buf
+            Some(data_buf)
         );
 
         // Send command buffer.
@@ -105,7 +99,9 @@ async fn main(_spawner: Spawner) {
         }
         debug!("R={=[u8]:02X}", data_read[..]);
 
-        if color == Color::Red {
+        // If the color is Cyan, then we have a finger placed still.
+        // Turn green to ack that we are done with that finger.
+        if color == Color::Cyan {
             let mut data_buf: Vec<u8, 32> = heapless::Vec::new();
             data_buf.clear();
             let _ = data_buf.push(LightPattern::AlwaysOn.into());   // Breathing Light
@@ -115,7 +111,7 @@ async fn main(_spawner: Spawner) {
             let send_buf = send(
                 Identifier::Command,
                 Instruction::AuraLedConfig,
-                data_buf
+                Some(data_buf)
             );
             let data_write: [u8; 16] = send_buf.clone().into_array().unwrap();
             match tx.write(&data_write).await {
@@ -127,16 +123,16 @@ async fn main(_spawner: Spawner) {
     }
 }
 
-fn send(pid: Identifier, command: Instruction, data: Vec<u8, 32>) -> Vec<u8, 256> {
+fn send(pid: Identifier, command: Instruction, data: Option<Vec<u8, 32>>) -> Vec<u8, 256> {
     let mut send_buf: Vec<u8, 256> = heapless::Vec::new();
 
     // Start    2 bytes Fixed value of 0xEF01; High byte transferred first.
-    let _ = send_buf.extend_from_slice(&START.to_be_bytes()[..]);
+    let _ = send_buf.extend_from_slice(&r503::HEADER.to_be_bytes()[..]);
 
     // Address  4 bytes Default value is 0xFFFFFFFF, which can be modified by command.
     //                  High byte transferred first and at wrong adder value, module
     //                  will reject to transfer.
-    let _ = send_buf.extend_from_slice(&ADDRESS.to_be_bytes()[..]);
+    let _ = send_buf.extend_from_slice(&r503::ADDRESS.to_be_bytes()[..]);
 
     // PID      1 byte  01H Command packet;
     //                  02H Data packet; Data packet shall not appear alone in executing
@@ -148,8 +144,10 @@ fn send(pid: Identifier, command: Instruction, data: Vec<u8, 32>) -> Vec<u8, 256
     // LENGTH   2 bytes Refers to the length of package content (command packets and data packets)
     //                  plus the length of Checksum (2 bytes). Unit is byte. Max length is 256 bytes.
     //                  And high byte is transferred first.
-    let len: u16 = (1 + data.len() + 2).try_into().unwrap();
-    let _ = send_buf.extend_from_slice(&len.to_be_bytes()[..]);
+    if let Some(data) = &data {
+        let len: u16 = (1 + data.len() + 2).try_into().unwrap();
+        let _ = send_buf.extend_from_slice(&len.to_be_bytes()[..]);
+    };
 
     // DATA     -       It can be commands, data, command’s parameters, acknowledge result, etc.
     //                  (fingerprint character value, template are all deemed as data);
@@ -158,11 +156,13 @@ fn send(pid: Identifier, command: Instruction, data: Vec<u8, 32>) -> Vec<u8, 256
     let _ = send_buf.push(command.into());
 
     // DATA
-    let _ = send_buf.extend_from_slice(&data);
+    if let Some(data) = &data {
+        let _ = send_buf.extend_from_slice(data);
+    }
 
     // SUM      2 bytes The arithmetic sum of package identifier, package length and all package
     //                  contens. Overflowing bits are omitted. high byte is transferred first.
-    let chk = compute_checksum(send_buf.clone());
+    let chk = r503::compute_checksum(send_buf.clone());
     let _ = send_buf.extend_from_slice(&chk.to_be_bytes()[..]);
 
     send_buf
